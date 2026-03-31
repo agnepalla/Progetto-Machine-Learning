@@ -7,7 +7,8 @@ In particolare, è stata esplorata l'influenza di vari metodi di allineamento or
 
 ## Contenuto
 LeNet_ID4
-https://colab.research.google.com/drive/1Wgxl7zzfTQeFZ5qapqWNLnkmh49CFy4i?usp=sharing
+https://colab.research.google.com/drive/1P6o5Zv-eIqB5pWV5QZs-P310qxXVMLhq?usp=sharing
+
 ResNet_ID4
 
 
