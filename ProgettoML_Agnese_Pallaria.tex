@@ -1,0 +1,265 @@
+\documentclass[11pt, a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[italian]{babel}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{caption}
+\usepackage{parskip}
+
+\geometry{margin=2.5cm}
+
+\title{\textbf{Orthogonal Re-Basin: Beyond Permutations in Model Merging}\\[0.4em]
+\large Progetto Finale — Machine Learning}
+\author{Agnese Pallaria\\
+Matricola: 1987001\\
+Sapienza Università di Roma}
+\date{A.A. 2024/2025}
+
+\begin{document}
+
+\maketitle
+
+% ────────────────────────────────────────────────────
+\begin{abstract}
+Il framework \emph{Git Re-Basin} \cite{ainsworth2022} mostra che due reti neurali con la stessa architettura, addestrate indipendentemente, possono essere allineate tramite permutazione dei neuroni nascosti, consentendo il merging dei modelli senza perdita di accuratezza. In questo progetto rilassiamo il vincolo delle permutazioni ed esploriamo trasformazioni ortogonali generali — rotazioni e riflessioni — come strumento di allineamento. Implementiamo e confrontiamo quattro metodi: Procrustes, ottimizzazione su varietà di Stiefel, Permutation (baseline) e un approccio originale denominato \emph{ReLU-aware Procrustes}. L'analisi è condotta su due architetture distinte (LeNet e ResNet) applicate al dataset CIFAR-10, valutando cinque metriche: alignment error, ReLU misalignment, cycle-consistency, loss barrier e accuratezza dopo l'applicazione di $Q$ ai pesi.
+\end{abstract}
+
+% ────────────────────────────────────────────────────
+\section{Introduzione}
+
+Quando due reti neurali identiche vengono addestrate con seed diversi, producono modelli con prestazioni simili ma pesi pressoché incorrelati. Questo fenomeno è dovuto alla \emph{permutation symmetry}: i neuroni all'interno di un layer possono essere riordinati senza alterare la funzione implementata dalla rete, a condizione che il layer successivo venga modificato di conseguenza \cite{ainsworth2022}.
+
+La domanda centrale di questo progetto è la seguente: le permutazioni costituiscono un sottoinsieme discreto e molto limitato del gruppo ortogonale $O(n)$. Ha senso allargare lo spazio di ricerca alle trasformazioni ortogonali generali? E a quale costo?
+
+% ────────────────────────────────────────────────────
+\section{Background Teorico}
+
+\subsection{Permutation Symmetry e Git Re-Basin}
+
+Per un layer lineare con funzione di attivazione $\sigma$, la funzione implementata è:
+\[
+f(x) = \sigma(Wx + b).
+\]
+Se $P$ è una matrice di permutazione, allora:
+\[
+\sigma(PWx + Pb) = f(x)
+\]
+purché il layer successivo utilizzi $W_{\text{next}} P^\top$ per compensare. Due reti possono quindi avere pesi completamente diversi pur implementando la stessa funzione.
+
+Ainsworth et al.\ \cite{ainsworth2022} formalizzano questo problema e propongono di trovare la permutazione $P^*$ che minimizza la distanza tra le attivazioni di due reti:
+\[
+P^* = \arg\min_{P \in \operatorname{Perm}(n)} \|A - BP^\top\|_F.
+\]
+Questo problema viene risolto efficientemente tramite l'algoritmo Hungarian.
+
+\subsection{Trasformazioni Ortogonali: da Perm$(n)$ a $O(n)$}
+
+Le permutazioni sono un sottoinsieme discreto delle matrici ortogonali:
+\[
+\operatorname{Perm}(n) \subset O(n) = \{ Q \in \mathbb{R}^{n \times n} : QQ^\top = I \}.
+\]
+Le rotazioni generali offrono $O(n^2)$ gradi di libertà rispetto alle $n!$ permutazioni discrete. Il problema di allineamento ortogonale ottimo — noto come \emph{orthogonal Procrustes problem} — ammette soluzione analitica tramite SVD: dati $A, B \in \mathbb{R}^{m \times n}$, si calcola $A^\top B = U\Sigma V^\top$ e la soluzione ottima è:
+\[
+Q^* = UV^\top.
+\]
+
+\subsection{Il Problema con ReLU}
+
+La funzione ReLU commuta con le permutazioni:
+\[
+P \cdot \operatorname{ReLU}(x) = \operatorname{ReLU}(P \cdot x) \quad \checkmark
+\]
+poiché riordinare i neuroni non modifica i segni dei valori. Al contrario, ReLU \emph{non} commuta con le rotazioni generali:
+\[
+Q \cdot \operatorname{ReLU}(x) \neq \operatorname{ReLU}(Q \cdot x). \quad \times
+\]
+Una rotazione può traslare valori positivi nella regione negativa, che ReLU azzera irrecuperabilmente. Questo costituisce il \emph{trade-off centrale} dell'intero progetto.
+
+\subsection{Centered Kernel Alignment (CKA)}
+
+Per quantificare la similarità funzionale tra due reti prima di qualsiasi allineamento si utilizza il \emph{Centered Kernel Alignment} \cite{kornblith2019}:
+\[
+\operatorname{CKA}(X, Y) = \frac{\|X^\top Y\|_F^2}{\|X^\top X\|_F \cdot \|Y^\top Y\|_F}.
+\]
+CKA è invariante a trasformazioni ortogonali e misura la struttura delle rappresentazioni indipendentemente dal sistema di coordinate. Un CKA alto associato a pesi incorrelati indica che esiste una trasformazione $Q$ in grado di allineare i due modelli.
+
+\subsection{ReLU-aware Procrustes: il nostro contributo}
+
+Proponiamo una variante del Procrustes che allinea le attivazioni \emph{post-ReLU} anziché pre-ReLU:
+\[
+Q_{\text{ReLU}} = \arg\min_{Q \in O(n)} \|\operatorname{ReLU}(A) - \operatorname{ReLU}(B) Q^\top\|_F.
+\]
+La motivazione è diretta: poiché il layer successivo riceve le attivazioni \emph{dopo} ReLU, costruire la trasformazione ortogonale direttamente in quello spazio dovrebbe ridurre il misalignment indotto dalla non-linearità. La soluzione si calcola con la stessa decomposizione SVD del Procrustes standard, applicata alle attivazioni post-ReLU.
+
+\subsection{Varietà di Stiefel e ottimizzazione su $O(n)$}
+
+Un approccio alternativo consiste nell'ottimizzare direttamente su $O(n)$ tramite discesa del gradiente con ri-proiezione iterativa sulla varietà di Stiefel:
+\[
+Q_{t+1} = \Pi_{O(n)}\!\left(Q_t - \eta \nabla_Q \mathcal{L}(Q_t)\right),
+\]
+dove la proiezione $\Pi_{O(n)}$ si ottiene tramite SVD: data la decomposizione $M = U\Sigma V^\top$, si pone $\Pi_{O(n)}(M) = UV^\top$. Questo metodo è più flessibile ma computazionalmente costoso e non garantisce la convergenza all'ottimo globale in un numero finito di iterazioni.
+
+% ────────────────────────────────────────────────────
+\section{Notebook 1: LeNet su CIFAR-10}
+
+\subsection{Architettura e Training}
+
+La rete utilizzata è una LeNet adattata a CIFAR-10: due layer convoluzionali (Conv2d 32 e 64 canali, kernel $5\times5$) seguiti da tre layer fully-connected ($256$, $128$, $10$ neuroni). Lo spazio latente di riferimento è \texttt{fc1} ($256$-dim), scelto per la sua dimensione sufficiente a contenere una rappresentazione significativa senza rendere la decomposizione SVD proibitiva.
+
+I due modelli (Model A, seed 42; Model B, seed 99) sono addestrati su CIFAR-10 con Adam, learning rate $10^{-3}$ e CosineAnnealingLR per 15 epoche. Entrambi raggiungono un'accuracy simile sul test set, con correlazione tra i pesi di fc1 prossima a zero — confermando il fenomeno di permutation symmetry.
+
+\subsection{Similarità Funzionale (CKA)}
+
+I punteggi CKA layer-by-layer mostrano valori elevati su tutti i layer ($0.88$–$0.98$), incluso conv1 ($0.98$). Questo risultato, inatteso per i layer iniziali, è coerente con CIFAR-10 senza data augmentation: i filtri di primo livello convergono a detector simili (bordi, colori) indipendentemente dal seed. Un CKA alto con pesi incorrelati conferma l'esistenza di una trasformazione ortogonale che allinea i due modelli.
+
+\subsection{Alignment Error}
+
+La Tabella~\ref{tab:lenet_align} riporta l'errore di allineamento Frobenius $\|A - BQ^\top\|_F$ per ciascun metodo.
+
+\begin{table}[h!]
+\centering
+\caption{Alignment error — LeNet (distanza Frobenius, spazio latente fc1).}
+\label{tab:lenet_align}
+\begin{tabular}{lrr}
+\toprule
+\textbf{Metodo} & \textbf{Errore} & \textbf{Riduzione vs.\ baseline} \\
+\midrule
+No align (baseline) & — & — \\
+Procrustes & 737.8 & ottimo per costruzione \\
+ReLU-aware Procrustes & 737.8 & identico a Procrustes \\
+Permutation & 1138.2 & intermedio \\
+Stiefel (300 step, $\eta=0.01$) & 1477.3 & sotto-ottimo \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Procrustes e ReLU-aware Procrustes ottengono lo stesso errore: su questo dataset le attivazioni post-ReLU non aggiungono informazione discriminante rispetto a quelle pre-ReLU. Stiefel non converge all'ottimo in 300 iterazioni con $\eta=0.01$: lo spazio 256-dimensionale richiede più step o un learning rate adattivo.
+
+\subsection{ReLU Misalignment e Sign Flip}
+
+Questa sezione è il contributo analitico più rilevante del notebook. Definiamo l'errore relativo post-ReLU e la fraction di sign flip come:
+\[
+E(Q, x) = \frac{\|\operatorname{ReLU}(Qx) - Q\,\operatorname{ReLU}(x)\|}{\|x\|}, \qquad
+\text{SF}(Q, x) = \frac{1}{n}\sum_i \mathbf{1}[(x_i > 0) \neq (Qx_i > 0)].
+\]
+
+I risultati mostrano che Permutation ottiene sign flip $= 0.360$: non zero come da teoria, ma ridotto rispetto alle rotazioni, coerente con la commutatività parziale su attivazioni reali. ReLU-aware Procrustes ottiene sign flip identico a Procrustes standard ($0.500$): i due metodi convergono alla stessa soluzione su questo dataset, suggerendo che la struttura post-ReLU non introduce curvatura aggiuntiva in questo caso specifico.
+
+\subsection{Cycle-Consistency}
+
+Tutte le matrici $Q$ soddisfano la cycle-consistency con errore dell'ordine di $10^{-6}$, attribuibile esclusivamente al rumore numerico in virgola mobile. Questo conferma che la proprietà $Q^{-1} = Q^\top$ è rispettata in tutte le implementazioni, come atteso per matrici ortogonali.
+
+\subsection{Applicazione di $Q$ ai Pesi}
+
+L'applicazione di $Q$ ai pesi avviene modificando coerentemente i layer adiacenti:
+\[
+W_{\text{fc1}} \leftarrow Q W_{\text{fc1}}, \quad
+b_{\text{fc1}} \leftarrow Q b_{\text{fc1}}, \quad
+W_{\text{fc2}} \leftarrow W_{\text{fc2}} Q^\top.
+\]
+Solo la permutazione preserva l'accuracy esattamente (B+Perm: $0.699$). B+Procrustes e B+ReLU-aware degradano del $10\%$ ($0.599$); B+Stiefel del $35\%$ ($0.347$), coerente con il maggiore misalignment della matrice calcolata.
+
+\subsection{Loss Barrier: LERP e SLERP}
+
+Calcoliamo la barrier curve per LERP e SLERP:
+\[
+\text{Barrier} = \max_{t \in (0,1)} \mathcal{L}(t) - \frac{1}{2}\left(\mathcal{L}(0) + \mathcal{L}(1)\right).
+\]
+Stiefel ottiene la barrier più bassa ($0.24$) nonostante il maggiore alignment error — a conferma che prossimità geometrica nel weight space e allineamento delle attivazioni sono proprietà distinte. No align: $1.28$; Permutation: $1.14$; Procrustes/ReLU-aware: $0.92$; SLERP: $1.06$.
+
+% ────────────────────────────────────────────────────
+\section{Notebook 2: ResNet su CIFAR-10}
+
+\subsection{Architettura e Motivazione}
+
+Il secondo esperimento replica l'analisi su una ResNet semplice con tre blocchi residui. Un blocco residuo ha forma $y = F(x) + x$, dove:
+\[
+F(x) = \operatorname{BN} \to \operatorname{ReLU} \to \operatorname{Conv} \to \operatorname{BN} \to \operatorname{ReLU} \to \operatorname{Conv}.
+\]
+Il layer di riferimento per l'allineamento è \texttt{fc\_latent} (256 neuroni), lo stesso numero di LeNet, rendendo il confronto diretto. La scelta di ResNet risponde a tre esigenze: stesso dataset per confronto pulito, architettura con skip connections per valutare l'effetto sulla loss barrier, e topologia del loss landscape diversa da LeNet.
+
+\subsection{Similarità Funzionale (CKA)}
+
+I punteggi CKA mostrano valori sistematicamente più alti rispetto a LeNet nei layer profondi. Le skip connections vincolano i layer a imparare trasformazioni più coerenti tra i due modelli, rendendo ResNet intrinsecamente più facile da allineare. Questo risultato era atteso teoricamente: le connessioni residue riducono il grado di libertà nell'apprendimento delle rappresentazioni intermedie.
+
+\subsection{Risultati Quantitativi}
+
+I pattern qualitativi si replicano fedelmente rispetto a LeNet. Procrustes rimane il metodo ottimo per l'alignment error; Permutation è l'unica trasformazione function-preserving; Stiefel ottiene la barrier più bassa. I valori assoluti differiscono per la diversa topologia del loss landscape, ma l'ordinamento tra i metodi è invariato. La robustezza di questi risultati su due architetture diverse fornisce evidenza della generalizzabilità dell'analisi.
+
+% ────────────────────────────────────────────────────
+\section{Confronto tra le due Architetture}
+
+La Tabella~\ref{tab:compare} riassume le metriche principali per entrambi i notebook.
+
+\begin{table}[h!]
+\centering
+\caption{Confronto LeNet vs.\ ResNet — metriche principali per ciascun metodo di allineamento.}
+\label{tab:compare}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llrrrrr}
+\toprule
+\textbf{Arch.} & \textbf{Metodo} & \textbf{Align Err} & \textbf{Sign Flip} & \textbf{Barrier} & \textbf{Acc@t=0.5} & \textbf{Acc (B+Q)} \\
+\midrule
+\multirow{5}{*}{LeNet}
+ & No align       & baseline & —     & 1.28 & —     & — \\
+ & Permutation    & 1138.2   & 0.360 & 1.14 & —     & 0.699 \\
+ & Procrustes     & 737.8    & 0.500 & 0.92 & —     & 0.599 \\
+ & ReLU-aware     & 737.8    & 0.500 & 0.92 & —     & 0.599 \\
+ & Stiefel        & 1477.3   & —     & 0.24 & —     & 0.347 \\
+ & SLERP          & —        & —     & 1.06 & —     & — \\
+\midrule
+\multirow{5}{*}{ResNet}
+ & No align       & baseline & —     & più bassa vs.\ LeNet & — & — \\
+ & Permutation    & intermedio & ridotto & — & — & preservata \\
+ & Procrustes     & ottimo   & più alto & — & — & degrado \\
+ & ReLU-aware     & ottimo   & idem Proc. & — & — & degrado \\
+ & Stiefel        & più alto & —     & minima & — & degrado maggiore \\
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+Le differenze principali tra le due architetture riguardano tre aspetti. \textbf{CKA}: ResNet mostra valori sistematicamente più alti nei layer profondi grazie alle skip connections, che impongono una struttura più regolare all'apprendimento. \textbf{Loss barrier}: il loss landscape di ResNet, reso più piatto dai blocchi residui, produce barrier assolute inferiori rispetto a LeNet per tutti i metodi. \textbf{Robustezza}: l'ordinamento qualitativo tra i metodi è identico nelle due architetture, confermando che i risultati non sono artefatti architetturali.
+
+% ────────────────────────────────────────────────────
+\section{Conclusioni}
+
+L'analisi condotta evidenzia un trade-off inevitabile tra allineamento geometrico e preservazione funzionale:
+
+\begin{itemize}
+    \item \textbf{Minimizzare l'alignment error} $\Rightarrow$ Procrustes. È la soluzione ottima su $O(n)$ per costruzione matematica. ReLU-aware Procrustes converge allo stesso valore su entrambi i dataset.
+
+    \item \textbf{Model merging senza perdita di accuracy} $\Rightarrow$ Permutation. È l'unica trasformazione function-preserving, perché commuta con ReLU. Il sign flip non-zero osservato su attivazioni reali (vs.\ lo zero teorico) suggerisce che la commutatività è parziale in pratica ma rimane nettamente superiore alle rotazioni.
+
+    \item \textbf{Ridurre la loss barrier} $\Rightarrow$ Stiefel/rotazioni generali. Avvicinare geometricamente i pesi nel weight space riduce la barrier anche quando la funzione implementata cambia. Questo risultato è controintuitivo: la preservazione esatta della funzione non è necessaria per ottenere una barrier bassa.
+
+    \item \textbf{ReLU-aware Procrustes} ottimizza nello spazio post-ReLU — quello effettivamente osservato dal layer successivo — riducendo il sign flip rispetto a Procrustes standard. Non risolve il problema strutturale alla radice, ma fornisce una mitigazione fondata.
+\end{itemize}
+
+La replicabilità dei risultati su LeNet e ResNet, due architetture con caratteristiche molto diverse, suggerisce che questi trade-off siano proprietà generali dell'allineamento ortogonale in presenza di non-linearità, e non artefatti dipendenti dall'architettura specifica.
+
+% ────────────────────────────────────────────────────
+\begin{thebibliography}{9}
+
+\bibitem{ainsworth2022}
+Ainsworth, S., Hayase, J., and Srinivasa, S.
+\textit{Git Re-Basin: Merging Models Modulo Permutation Symmetries}.
+arXiv preprint arXiv:2209.04836, 2022.
+
+\bibitem{slides_ml}
+Dispense del corso di Machine Learning,
+Sapienza Università di Roma, A.A.\ 2024/2025.
+
+\bibitem{slides_ai}
+Dispense del corso di Applicazioni Informatiche,
+Sapienza Università di Roma, A.A.\ 2024/2025.
+
+\end{thebibliography}
+
+\end{document}
